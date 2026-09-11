@@ -1,0 +1,109 @@
+# 视觉基本常识
+### 这份文档主要记载一些常识与经验。其中部分内容参考陈琦哥的文档。相机部分的内容拆分到了hk_camera_note.md中。
+
+# 修改启动配置
+* 目前车上的启动路径是：rm_bringup vision_start.service --> ~/vision_start.sh --> rm_bringup vision_start.launch -->海康launch/瞄launch/风车launch/...
+* 从以上文件进行修改，注意.sh/.launch中**实际调用的是哪个文件**
+
+# 自启动
+车上各个功能的自启动都是通过服务实现的。在rm_bringup/scripts/auto_start中。
+
+视觉自启从`vision_start.service`开始，顺着调用链一个个查。
+
+相机录制看`camera_rosbag_record`。
+### 创建/修改一个服务
+1. 修改/创建对应的.service(以及.sh .launch)
+2. 在rm_bringup/scripts中跑 `./create_specific_service.sh <服务的名字(不带.sh!!!!!)>`
+3. 开机自启：`sudo systemctl enable xxx`
+4. 直接启动服务`sudo systemctl start xxx`
+
+**手跑和自启(跑服务)不等效的原因**
+.bashrc和environment.sh不一样，或者和vision_start.sh不一样
+
+# 测试
+### 正确的测试方法很重要。
+* 最优的测试方法应该从bag开始循序渐进，并且在最接近真实工况的情况下完成最终测试。
+
+    对于自瞄来说，就是在光照条件接近的情况下开着全部程序（包括风车、录bag等），两台步兵连操作手端1v1，而不是仅限于看bag测试或者仅限于抽靶车。
+
+* 鲁棒性测试也很重要
+
+    对于自瞄来说，就是不同光照、不同曝光下进行测试；同时引入激烈对抗的工况检查线束稳定性
+
+* 自瞄的评判标准不仅限于命中率，也应该引入击杀时间作为评判标准之一。
+
+# 车上录bag
+录制tf tf_static compressed图像 track debug信息 **具体话题根据当前自瞄的情况决定**
+
+**不要开着plot或者rqt录bag**
+
+### 手跑
+### 自启
+1. 去rm_bringup/scripts/auto_start中把camera_rosbag_record.service放出来
+2. 把camera_rosbag_record.service开起来(`sudo systemctl enable xxx`，`sudo systemctl start xxx`)
+3. 进去/Documents看有无vision文件夹，再进去看里面的bag有没有录到compressed话题(`rosbag info xxx.bag`)
+
+# 拉bag
+
+`~/Documents/vision`
+
+### 修bag
+
+* 强制关机会导致bag不正常中断，表现为`xxx.bag.active`
+* 修复在车上跑：
+  * `rosbag reindex 1.bag.active`
+  * `rosbag fix 1.bag.active 1.bag` 
+
+本机跑scp拉bag
+
+### bag截取
+
+`rosbag filter 2.bag 2_output.bag "(topic =='/hk_camera/camera/image_raw/compressed' or topic =='/hk_camera/camera/camera_info') and (t.to_sec() >= 1742546121.004289 and t.to_sec() <=  1742546135.004289)"`
+
+* t.to_sec():bag中ros对应的时间戳，需要播放bag在终端复制
+
+# 跑bag
+1. 同步时间(跑一次就行) `rosparam set /use_sim_time true`
+
+2. compressed重映射(一直挂着) `rosrun image_transport republish compressed raw in:=/hk_camera/image_raw raw out:=/hk_camera/image_raw`(嗯，这个话题就是这样写的)
+
+   * `in:=/hk_camera/image_raw`：输入话题的基名称(base topic)。实际订阅的话题是 `/hk_camera/image_raw/compressed`(自动加上类型后缀) 
+   * `out:=/hk_camera/image_raw`：输出话题的基名称
+
+3. 跑bag
+
+   **注意：有时会把image_raw_down映射到image_raw上**
+
+rosbag play --help看跑bag选项。常见有：
+
+* `-r 0.5`:0.5倍速播放
+ * `-l`:循环播放
+ * `--topic <topic1>`:指定topic播放
+ * `-s t`:在bag的t秒开始播放
+
+bag的时间:记录比赛开始的时间，**减8h**即为bag时间(不用加2min)
+
+# 日志
+
+### 系统日志
+
+* 位置：~/Ducument/syslog(没有再去看/var/log/syslog)
+* 操作
+  * 把syslog拉下来看(也可以在车上用vim看)
+  * 定位对应的时间点看是什么节点死了
+  * Tips:一堆@表示关机(用vim看)
+
+### 视觉日志
+
+* `~/Documents/vision_logs/`
+* 注意时间戳减8h
+
+**WARNING**：每局比赛开始前一定要安排人手记录上电时间，方便找bag、找日志
+
+# 特殊情况
+
+### 灯一闪一闪的
+
+国内为50hz交流电，会让部分灯出现肉眼不可见的频闪（但相机可以捕捉到）。灯亮的频率低于相机频率导致画面一闪一闪，一亮一暗。暗的一瞬间可能会导致识别不到导致装甲板识别闪烁
+**验证方法：** 在旁边开手电筒补光，若识别效果提升则说明确实是开灯问题
+**解决方法：** 换场地或者关灯
